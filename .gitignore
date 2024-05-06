@@ -7,3 +7,7 @@ __pycache__
 *.jpg
 *.jpeg
 *.png
+!examples/rusting_0027.jpg
+!examples/rusting_0044.jpg
+!examples/rusting_0138.jpg
+!examples/shedding_concrete_0014.jpg

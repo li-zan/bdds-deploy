@@ -4,3 +4,4 @@ gradio
 tqdm
 pillow
 ultralytics
+pandas

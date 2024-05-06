@@ -37,6 +37,8 @@ def remove_files_older_than(directory: str, diff_minutes: int) -> None:
     file_count = len(older_files)
 
     for file_path in older_files:
+        if ".gitkeep" in file_path:
+            continue
         os.remove(file_path)
 
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
