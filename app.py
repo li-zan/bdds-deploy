@@ -3,7 +3,7 @@ from typing import List
 import os
 import gradio as gr
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 import supervision as sv
 import torch
 from tqdm import tqdm
@@ -11,16 +11,16 @@ from utils.yolo_world import YOLOWorld
 from utils import stastics
 import timeit
 
-from utils.efficient_sam import load, inference_with_boxes
+from utils.efficient_sam import load, inference_with_boxes, inference_with_points
 from utils.video import (
     generate_file_name,
     calculate_end_frame_index,
     create_directory,
     remove_files_older_than
 )
-
+TITLE = "Bridge Defect Detection"
 MARKDOWN = """
-# YOLO-World + EfficientSAM 🔥
+<h1 style="text-align:center;display:block">YOLO-World + EfficientSAM 🔥</h1>
 
 
 
@@ -71,6 +71,87 @@ create_directory(directory_path=RESULTS)
 
 def process_categories(categories: str) -> List[str]:
     return [category.strip() for category in categories.split(',')]
+
+
+def get_points_with_draw(image: Image.Image, points: [], with_segmentation: bool, evt: gr.SelectData):
+    if points is None:
+        points = []
+    if with_segmentation is False:
+        info("segmentation is not enable in configuration")
+        return image, points
+    print("Starting draw point")
+    x, y = evt.index[0], evt.index[1]
+    point_radius, point_color = 15, (255, 255, 0)
+    points.append([x, y])
+
+    if image is not None:
+        draw = ImageDraw.Draw(image)
+        draw.ellipse(
+            [(x - point_radius, y - point_radius), (x + point_radius, y + point_radius)],
+            fill=point_color,
+        )
+
+    return image, points
+
+
+def refine_segmentation(
+    input_image: Image.Image,
+    output_image: Image.Image,
+    points: [],
+    categories,
+    with_segmentation: bool = True,
+    with_label: bool = True,
+    with_confidence: bool = True
+):
+    if points is None or len(points) == 0:
+        return output_image, points
+    if with_segmentation is False:
+        info("segmentation is not enable in configuration")
+        return output_image, points
+    print("Starting refine segmentation")
+    # 剔除检测框外的点
+    global Detections
+    detections = Detections
+
+    filtered_points = []
+    filtered_indices = []
+    for point in points:
+        x, y = point
+        max_area = 0
+        max_area_index = -1
+        for i, detection in enumerate(detections.xyxy):
+            x1, y1, x2, y2 = detection[:4]
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                area = (x2 - x1) * (y2 - y1)
+                if area > max_area:
+                    max_area = area
+                    max_area_index = i
+        if max_area_index != -1:
+            filtered_points.append(point)
+            filtered_indices.append(max_area_index)
+    # 根据point做seg
+    input_image_np = np.array(input_image)
+    point_mask = inference_with_points(
+        image=input_image_np,
+        points=filtered_points,
+        model=EFFICIENT_SAM_MODEL,
+        device=DEVICE
+    )
+    # 更新mask
+    updated_mask = detections.mask.copy()
+    for i, index in enumerate(filtered_indices):
+        updated_mask[index] = np.logical_xor(updated_mask[index], point_mask[i])
+    detections.mask = updated_mask
+
+    output_image = annotate_image(
+        input_image=input_image,
+        detections=detections,
+        categories=categories,
+        with_label=with_label,
+        with_confidence=with_confidence
+    )
+    points = []
+    return output_image, points
 
 
 def annotate_image(
@@ -145,11 +226,14 @@ def process_image(
     end = timeit.default_timer()
     total_num = stastics.get_total_num(detections)
     class_count = stastics.get_class_count(detections)
-    total_seg_proportion = stastics.get_total_seg_proportion(detections)
+    total_seg_proportion = stastics.get_total_seg_proportion(detections, input_image)
     average_confidence = stastics.get_average_confidence(detections)
     duration = stastics.format_time(end - start)
-    det_frame = stastics.get_det_dataFrame(detections)
-    return output_image, total_num, class_count, total_seg_proportion, average_confidence, duration, det_frame
+    det_frame = stastics.get_det_dataFrame(detections, input_image)
+    global Detections
+    Detections = detections
+    return output_image, total_num, class_count, total_seg_proportion, average_confidence, duration, det_frame,\
+        categories
 
 
 def process_video(
@@ -203,6 +287,10 @@ def process_video(
             frame = np.array(frame)
             sink.write_frame(frame)
     return result_file_path
+
+
+def info(msg):
+    gr.Info(msg)
 
 
 confidence_threshold_component = gr.Slider(
@@ -265,7 +353,10 @@ with_class_agnostic_nms_component = gr.Checkbox(
 )
 
 
-with gr.Blocks() as demo:
+with gr.Blocks(title=TITLE) as demo:
+    global_points = gr.State([])
+    Detections = None
+    Categories = gr.State()
     gr.Markdown(MARKDOWN)
     with gr.Accordion("Configuration", open=False):
         confidence_threshold_component.render()
@@ -297,11 +388,16 @@ with gr.Blocks() as demo:
                 scale=1,
                 variant='primary'
             )
+            seg_refine_button_component = gr.Button(
+                value='Refine',
+                scale=1,
+                variant='secondary'
+            )
             clear_image_button_component = gr.ClearButton(
                 value='Clear',
                 scale=1,
                 variant='secondary',
-                components=[input_image_component, output_image_component]
+                components=[input_image_component, output_image_component, global_points]
             )
 
         with gr.Tab(label='result'):
@@ -400,6 +496,12 @@ with gr.Blocks() as demo:
             outputs=output_image_component
         )
 
+    output_image_component.select(
+        fn=get_points_with_draw,
+        inputs=[output_image_component, global_points, with_segmentation_component],
+        outputs=[output_image_component, global_points]
+    )
+
     image_submit_button_component.click(
         fn=process_image,
         inputs=[
@@ -419,7 +521,30 @@ with gr.Blocks() as demo:
             total_seg_proportion_component,
             average_confidence_component,
             total_duration_component,
-            det_sheet_component
+            det_sheet_component,
+            Categories
+        ]
+    )
+    seg_refine_button_component.click(
+        fn=refine_segmentation,
+        inputs=[
+            input_image_component,
+            output_image_component,
+            global_points,
+            Categories,
+            with_segmentation_component,
+            with_label_component,
+            with_confidence_component,
+        ],
+        outputs=[
+            output_image_component,
+            global_points,
+            # det_num_component,
+            # class_count_component,
+            # total_seg_proportion_component,
+            # average_confidence_component,
+            # total_duration_component,
+            # det_sheet_component
         ]
     )
     video_submit_button_component.click(

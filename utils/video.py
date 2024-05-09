@@ -50,10 +50,7 @@ def remove_files_older_than(directory: str, diff_minutes: int) -> None:
 
 def calculate_end_frame_index(source_video_path: str) -> int:
     video_info = sv.VideoInfo.from_video_path(source_video_path)
-    return min(
-        video_info.total_frames,
-        video_info.fps * MAX_VIDEO_LENGTH_SEC
-    )
+    return video_info.total_frames
 
 
 def create_directory(directory_path: str) -> None:

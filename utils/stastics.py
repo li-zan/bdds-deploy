@@ -1,5 +1,6 @@
 import supervision as sv
 import pandas as pd
+from PIL import Image
 
 
 def get_total_num(detections: sv.Detections):
@@ -31,15 +32,15 @@ def get_average_confidence(detections: sv.Detections):
     return f'{average_confidence:.2f}'
 
 
-def get_total_seg_proportion(detections: sv.Detections):
+def get_total_seg_proportion(detections: sv.Detections, image: Image.Image):
     if len(detections) == 0:
         return '0.00 %'
     total_seg_area = sum(detections.area)
-    total_area = detections.mask[0].shape[0] * detections.mask[0].shape[1]
+    total_area = image.size[0] * image.size[1]
     return f'{total_seg_area / total_area * 100:.2f} %'
 
 
-def get_det_dataFrame(detections: sv.Detections):
+def get_det_dataFrame(detections: sv.Detections, image: Image.Image):
     if len(detections) == 0:
         det_dict = {
             "id": ['None'],
@@ -51,7 +52,7 @@ def get_det_dataFrame(detections: sv.Detections):
         }
         return pd.DataFrame(det_dict)
 
-    total_area = detections.mask[0].shape[0] * detections.mask[0].shape[1]
+    total_area = image.size[0] * image.size[1]
 
     det_dict = {
         "id": [
