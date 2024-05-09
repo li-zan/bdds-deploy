@@ -60,8 +60,8 @@ def get_det_dataFrame(detections: sv.Detections, image: Image.Image):
             for idx in range(1, len(detections.confidence)+1)
         ],
         "class_name": list(detections.data['class_name']),
-        "confidence": [f"{x:.2f}" for x in detections.confidence],
-        "area": [f"{x/total_area*100:.2f} %" for x in detections.area],
+        "confidence": [f"{x:.3f}" for x in detections.confidence],
+        "area": [f"{x/total_area*100:.3f} %" for x in detections.area],
         "upper_left": [
             (int(x), int(y))
             for x, y, _, _ in detections.xyxy.astype(int)

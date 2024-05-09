@@ -98,7 +98,6 @@ def refine_segmentation(
     input_image: Image.Image,
     output_image: Image.Image,
     points: [],
-    categories,
     with_segmentation: bool = True,
     with_label: bool = True,
     with_confidence: bool = True
@@ -110,8 +109,9 @@ def refine_segmentation(
         return output_image, points
     print("Starting refine segmentation")
     # 剔除检测框外的点
-    global Detections
+    global Detections, Categories
     detections = Detections
+    categories = Categories
 
     filtered_points = []
     filtered_indices = []
@@ -129,6 +129,9 @@ def refine_segmentation(
         if max_area_index != -1:
             filtered_points.append(point)
             filtered_indices.append(max_area_index)
+    if len(filtered_points) == 0:
+        print("All points are invalid")
+        return output_image, points
     # 根据point做seg
     input_image_np = np.array(input_image)
     point_mask = inference_with_points(
@@ -140,7 +143,7 @@ def refine_segmentation(
     # 更新mask
     updated_mask = detections.mask.copy()
     for i, index in enumerate(filtered_indices):
-        updated_mask[index] = np.logical_xor(updated_mask[index], point_mask[i])
+        updated_mask[index] = np.logical_or(updated_mask[index], point_mask[i])
     detections.mask = updated_mask
 
     output_image = annotate_image(
@@ -230,10 +233,10 @@ def process_image(
     average_confidence = stastics.get_average_confidence(detections)
     duration = stastics.format_time(end - start)
     det_frame = stastics.get_det_dataFrame(detections, input_image)
-    global Detections
+    global Detections, Categories
     Detections = detections
-    return output_image, total_num, class_count, total_seg_proportion, average_confidence, duration, det_frame,\
-        categories
+    Categories = categories
+    return output_image, total_num, class_count, total_seg_proportion, average_confidence, duration, det_frame
 
 
 def process_video(
@@ -296,7 +299,7 @@ def info(msg):
 confidence_threshold_component = gr.Slider(
     minimum=0,
     maximum=1.0,
-    value=0.1,
+    value=0.002,
     step=0.01,
     label="Confidence Threshold",
     info=(
@@ -356,7 +359,7 @@ with_class_agnostic_nms_component = gr.Checkbox(
 with gr.Blocks(title=TITLE) as demo:
     global_points = gr.State([])
     Detections = None
-    Categories = gr.State()
+    Categories = None
     gr.Markdown(MARKDOWN)
     with gr.Accordion("Configuration", open=False):
         confidence_threshold_component.render()
@@ -521,8 +524,7 @@ with gr.Blocks(title=TITLE) as demo:
             total_seg_proportion_component,
             average_confidence_component,
             total_duration_component,
-            det_sheet_component,
-            Categories
+            det_sheet_component
         ]
     )
     seg_refine_button_component.click(
@@ -531,7 +533,6 @@ with gr.Blocks(title=TITLE) as demo:
             input_image_component,
             output_image_component,
             global_points,
-            Categories,
             with_segmentation_component,
             with_label_component,
             with_confidence_component,

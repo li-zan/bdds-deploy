@@ -20,9 +20,7 @@ def inference_with_point(
     device: torch.device
 ) -> np.ndarray:
     t_point = torch.reshape(torch.tensor(point), [1, 1, 1, 2])
-    t_label = torch.reshape(torch.tensor([1, 1]), [1, 1, 2])
-    print('t_point', t_point)
-    print('t_label', t_label)
+    t_label = torch.reshape(torch.tensor([1]), [1, 1, 1])
     img_tensor = ToTensor()(image)
 
     predicted_logits, predicted_iou = model(

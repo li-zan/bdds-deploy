@@ -2,6 +2,16 @@
 
 ### :triangular_flag_on_post: 更新日志：
 
+#### :construction:开发中...
+
+- 用户精细分割后同步更新统计结果
+
+- 视频推理同时 可视化 实时过程
+
+
+
+- **[2024/5/9]**
+  - :sparkles:支持用户多次添加`注意力点`来精细化分割结果
 - **[2024/5/6]**
   - :sparkles:新增`混凝土掉块露筋`+`锈蚀`检测与分割
   - :hammer:新增statistic模块，用于对检测与分割结果做数据统计与分析​
@@ -11,7 +21,6 @@
   - :construction:视频检测初步开发实现
 
 - **[2024/4/28]**
-
   - :hammer:优化代码结构，模块化构建，新增utils/yolo_world模块
 
   - :sparkles:新增优化efficient_sam模块，支持tiny,small两种类型网络初始化
