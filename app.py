@@ -1,6 +1,8 @@
 from typing import List
 
 import os
+
+import cv2
 import gradio as gr
 import numpy as np
 from PIL import Image, ImageDraw
@@ -265,6 +267,8 @@ def process_video(
     with sv.VideoSink(result_file_path, video_info=video_info) as sink:
         for _ in tqdm(range(total), desc="Processing video..."):
             frame = next(frame_generator)
+            print(type(frame))  # <class 'numpy.ndarray'>
+            # TODO sava frame  单独检测
             frame = Image.fromarray(frame)
             results = YOLO_WORLD_MODEL.infer(frame, confidence=confidence_threshold, iou=iou_threshold, text=categories)
             detections = sv.Detections.from_inference(results)
@@ -288,6 +292,8 @@ def process_video(
                 with_confidence=with_confidence
             )
             frame = np.array(frame)
+            cv2.imshow("Real-Time Inference", frame)
+            cv2.waitKey(10)
             sink.write_frame(frame)
     return result_file_path
 

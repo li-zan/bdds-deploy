@@ -5,3 +5,4 @@ tqdm
 pillow
 ultralytics
 pandas
+opencv-python
