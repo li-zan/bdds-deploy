@@ -82,10 +82,6 @@ def get_points_with_draw(image: Image.Image, points: [], seg_refine_mode, with_s
         info("segmentation is not enable in configuration")
         return image, points
     print("Starting draw point")
-    if seg_refine_mode == 'Point':
-        print("Point mode")
-    if seg_refine_mode == 'Box':
-        print("Box mode")
     x, y = evt.index[0], evt.index[1]
     point_radius, point_color = 15, (255, 255, 0)
     points.append([x, y])
@@ -96,7 +92,29 @@ def get_points_with_draw(image: Image.Image, points: [], seg_refine_mode, with_s
             [(x - point_radius, y - point_radius), (x + point_radius, y + point_radius)],
             fill=point_color,
         )
-
+    print("1-points=", points)
+    if seg_refine_mode == 'Box':
+        for i in range(0, len(points), 2):
+            if len(points) >= i + 2:
+                x1, y1 = points[i]
+                x2, y2 = points[i + 1]
+                if x1 < x2 and y1 < y2:
+                    draw.rectangle([x1, y1, x2, y2], outline="red", width=5)
+                elif x1 < x2 and y1 >= y2:
+                    draw.rectangle([x1, y2, x2, y1], outline="red", width=5)
+                    points[i][1] = y2
+                    points[i + 1][1] = y1
+                elif x1 >= x2 and y1 < y2:
+                    draw.rectangle([x2, y1, x1, y2], outline="red", width=5)
+                    points[i][0] = x2
+                    points[i + 1][0] = x1
+                elif x1 >= x2 and y1 >= y2:
+                    draw.rectangle([x2, y2, x1, y1], outline="red", width=5)
+                    points[i][0] = x2
+                    points[i][1] = y2
+                    points[i + 1][0] = x1
+                    points[i + 1][1] = y1
+    print("2-points=", points)
     return image, points
 
 
