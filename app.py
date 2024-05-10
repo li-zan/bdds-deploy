@@ -92,7 +92,6 @@ def get_points_with_draw(image: Image.Image, points: [], seg_refine_mode, with_s
             [(x - point_radius, y - point_radius), (x + point_radius, y + point_radius)],
             fill=point_color,
         )
-    print("1-points=", points)
     if seg_refine_mode == 'Box':
         for i in range(0, len(points), 2):
             if len(points) >= i + 2:
@@ -114,7 +113,6 @@ def get_points_with_draw(image: Image.Image, points: [], seg_refine_mode, with_s
                     points[i][1] = y2
                     points[i + 1][0] = x1
                     points[i + 1][1] = y1
-    print("2-points=", points)
     return image, points
 
 
@@ -122,6 +120,7 @@ def refine_segmentation(
     input_image: Image.Image,
     output_image: Image.Image,
     points: [],
+    seg_refine_mode: str,
     with_segmentation: bool = True,
     with_label: bool = True,
     with_confidence: bool = True
@@ -131,6 +130,10 @@ def refine_segmentation(
     if with_segmentation is False:
         info("segmentation is not enable in configuration")
         return output_image, points
+    if seg_refine_mode == 'Box':
+        if len(points) % 2 != 0:
+            info("The coordinates of box are incomplete")
+            return output_image, points
     print("Starting refine segmentation")
     # 剔除检测框外的点
     global Detections, Categories
@@ -139,31 +142,57 @@ def refine_segmentation(
 
     filtered_points = []
     filtered_indices = []
-    for point in points:
-        x, y = point
-        max_area = 0
-        max_area_index = -1
-        for i, detection in enumerate(detections.xyxy):
-            x1, y1, x2, y2 = detection[:4]
-            if x1 <= x <= x2 and y1 <= y <= y2:
-                area = (x2 - x1) * (y2 - y1)
-                if area > max_area:
-                    max_area = area
-                    max_area_index = i
-        if max_area_index != -1:
-            filtered_points.append(point)
-            filtered_indices.append(max_area_index)
+    for idx in range(0, len(points), 2):
+        x1, y1 = points[idx]
+        x2, y2 = points[idx + 1]
+        if seg_refine_mode == 'Box':
+            max_area = 0
+            max_area_index = -1
+            for i, detection in enumerate(detections.xyxy):
+                x_min, y_min, x_max, y_max = detection[:4]
+                if x1 >= x_min and y1 >= y_min and x2 <= x_max and y2 <= y_max:
+                    area = (x_max - x_min) * (y_max - y_min)
+                    if area > max_area:
+                        max_area = area
+                        max_area_index = i
+            if max_area_index != -1:
+                filtered_points.append([x1, y1, x2, y2])
+                filtered_indices.append(max_area_index)
+        elif seg_refine_mode == 'Point':
+            for point in [points[idx], points[idx + 1]]:
+                x, y = point
+                max_area = 0
+                max_area_index = -1
+                for i, detection in enumerate(detections.xyxy):
+                    x1, y1, x2, y2 = detection[:4]
+                    if x1 <= x <= x2 and y1 <= y <= y2:
+                        area = (x2 - x1) * (y2 - y1)
+                        if area > max_area:
+                            max_area = area
+                            max_area_index = i
+                if max_area_index != -1:
+                    filtered_points.append(point)
+                    filtered_indices.append(max_area_index)
     if len(filtered_points) == 0:
         info("All points are invalid")
         return output_image, points
     # 根据point做seg
     input_image_np = np.array(input_image)
-    point_mask = inference_with_points(
-        image=input_image_np,
-        points=filtered_points,
-        model=EFFICIENT_SAM_MODEL,
-        device=DEVICE
-    )
+    if seg_refine_mode == 'Point':
+        point_mask = inference_with_points(
+            image=input_image_np,
+            points=filtered_points,
+            model=EFFICIENT_SAM_MODEL,
+            device=DEVICE
+        )
+    if seg_refine_mode == 'Box':
+        filtered_points = np.array(filtered_points)
+        point_mask = inference_with_boxes(
+            image=input_image_np,
+            xyxy=filtered_points,
+            model=EFFICIENT_SAM_MODEL,
+            device=DEVICE
+        )
     # 更新mask
     updated_mask = detections.mask.copy()
     for i, index in enumerate(filtered_indices):
@@ -572,6 +601,7 @@ with gr.Blocks(title=TITLE) as demo:
             input_image_component,
             output_image_component,
             global_points,
+            seg_refine_mode_component,
             with_segmentation_component,
             with_label_component,
             with_confidence_component,
