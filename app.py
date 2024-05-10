@@ -121,19 +121,21 @@ def refine_segmentation(
     output_image: Image.Image,
     points: [],
     seg_refine_mode: str,
+    total_seg_proportion,
+    det_frame,
     with_segmentation: bool = True,
     with_label: bool = True,
     with_confidence: bool = True
 ):
     if points is None or len(points) == 0:
-        return output_image, points
+        return output_image, points, total_seg_proportion, det_frame
     if with_segmentation is False:
         info("segmentation is not enable in configuration")
-        return output_image, points
+        return output_image, points, total_seg_proportion, det_frame
     if seg_refine_mode == 'Box':
         if len(points) % 2 != 0:
             info("The coordinates of box are incomplete")
-            return output_image, points
+            return output_image, points, total_seg_proportion, det_frame
     print("Starting refine segmentation")
     # 剔除检测框外的点
     global Detections, Categories
@@ -177,7 +179,7 @@ def refine_segmentation(
 
     if len(filtered_points) == 0:
         info("All points are invalid")
-        return output_image, points
+        return output_image, points, total_seg_proportion, det_frame
 
     # 根据point做seg
     input_image_np = np.array(input_image)
@@ -608,6 +610,8 @@ with gr.Blocks(title=TITLE) as demo:
             output_image_component,
             global_points,
             seg_refine_mode_component,
+            total_seg_proportion_component,
+            det_sheet_component,
             with_segmentation_component,
             with_label_component,
             with_confidence_component,
