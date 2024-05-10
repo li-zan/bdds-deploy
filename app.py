@@ -75,13 +75,17 @@ def process_categories(categories: str) -> List[str]:
     return [category.strip() for category in categories.split(',')]
 
 
-def get_points_with_draw(image: Image.Image, points: [], with_segmentation: bool, evt: gr.SelectData):
+def get_points_with_draw(image: Image.Image, points: [], seg_refine_mode, with_segmentation: bool, evt: gr.SelectData):
     if points is None:
         points = []
     if with_segmentation is False:
         info("segmentation is not enable in configuration")
         return image, points
     print("Starting draw point")
+    if seg_refine_mode == 'Point':
+        print("Point mode")
+    if seg_refine_mode == 'Box':
+        print("Box mode")
     x, y = evt.index[0], evt.index[1]
     point_radius, point_color = 15, (255, 255, 0)
     points.append([x, y])
@@ -132,7 +136,7 @@ def refine_segmentation(
             filtered_points.append(point)
             filtered_indices.append(max_area_index)
     if len(filtered_points) == 0:
-        print("All points are invalid")
+        info("All points are invalid")
         return output_image, points
     # 根据point做seg
     input_image_np = np.array(input_image)
@@ -399,11 +403,20 @@ with gr.Blocks(title=TITLE) as demo:
                 scale=1,
                 variant='primary'
             )
-            seg_refine_button_component = gr.Button(
-                value='Refine',
-                scale=1,
-                variant='secondary'
-            )
+            with gr.Column():
+                with gr.Group():
+                    seg_refine_mode_component = gr.Radio(
+                        choices=['Point', 'Box'],
+                        label='Refine Mode',
+                        value='Point',
+                        scale=1,
+                        interactive=True
+                    )
+                    seg_refine_button_component = gr.Button(
+                        value='Refine',
+                        scale=1,
+                        variant='secondary'
+                    )
             clear_image_button_component = gr.ClearButton(
                 value='Clear',
                 scale=1,
@@ -509,7 +522,7 @@ with gr.Blocks(title=TITLE) as demo:
 
     output_image_component.select(
         fn=get_points_with_draw,
-        inputs=[output_image_component, global_points, with_segmentation_component],
+        inputs=[output_image_component, global_points, seg_refine_mode_component, with_segmentation_component],
         outputs=[output_image_component, global_points]
     )
 
