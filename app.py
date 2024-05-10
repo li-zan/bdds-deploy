@@ -142,10 +142,10 @@ def refine_segmentation(
 
     filtered_points = []
     filtered_indices = []
-    for idx in range(0, len(points), 2):
-        x1, y1 = points[idx]
-        x2, y2 = points[idx + 1]
-        if seg_refine_mode == 'Box':
+    if seg_refine_mode == 'Box':
+        for idx in range(0, len(points), 2):
+            x1, y1 = points[idx]
+            x2, y2 = points[idx + 1]
             max_area = 0
             max_area_index = -1
             for i, detection in enumerate(detections.xyxy):
@@ -158,24 +158,27 @@ def refine_segmentation(
             if max_area_index != -1:
                 filtered_points.append([x1, y1, x2, y2])
                 filtered_indices.append(max_area_index)
-        elif seg_refine_mode == 'Point':
-            for point in [points[idx], points[idx + 1]]:
-                x, y = point
-                max_area = 0
-                max_area_index = -1
-                for i, detection in enumerate(detections.xyxy):
-                    x1, y1, x2, y2 = detection[:4]
-                    if x1 <= x <= x2 and y1 <= y <= y2:
-                        area = (x2 - x1) * (y2 - y1)
-                        if area > max_area:
-                            max_area = area
-                            max_area_index = i
-                if max_area_index != -1:
-                    filtered_points.append(point)
-                    filtered_indices.append(max_area_index)
+
+    elif seg_refine_mode == 'Point':
+        for point in points:
+            x, y = point
+            max_area = 0
+            max_area_index = -1
+            for i, detection in enumerate(detections.xyxy):
+                x1, y1, x2, y2 = detection[:4]
+                if x1 <= x <= x2 and y1 <= y <= y2:
+                    area = (x2 - x1) * (y2 - y1)
+                    if area > max_area:
+                        max_area = area
+                        max_area_index = i
+            if max_area_index != -1:
+                filtered_points.append(point)
+                filtered_indices.append(max_area_index)
+
     if len(filtered_points) == 0:
         info("All points are invalid")
         return output_image, points
+
     # 根据point做seg
     input_image_np = np.array(input_image)
     if seg_refine_mode == 'Point':
@@ -206,8 +209,11 @@ def refine_segmentation(
         with_label=with_label,
         with_confidence=with_confidence
     )
+
     points = []
-    return output_image, points
+    total_seg_proportion = stastics.get_total_seg_proportion(detections, input_image)
+    det_frame = stastics.get_det_dataFrame(detections, input_image)
+    return output_image, points, total_seg_proportion, det_frame
 
 
 def annotate_image(
@@ -609,12 +615,8 @@ with gr.Blocks(title=TITLE) as demo:
         outputs=[
             output_image_component,
             global_points,
-            # det_num_component,
-            # class_count_component,
-            # total_seg_proportion_component,
-            # average_confidence_component,
-            # total_duration_component,
-            # det_sheet_component
+            total_seg_proportion_component,
+            det_sheet_component
         ]
     )
     video_submit_button_component.click(
