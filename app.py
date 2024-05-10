@@ -43,7 +43,7 @@ IMAGE_EXAMPLES = [
     ['./examples/rusting_0138.jpg', 'shedding_concrete,rusting', 0.01, 0.1, True, True, False, False],
 ]
 VIDEO_EXAMPLES = [
-    ['./examples/output.mp4', 'shedding_concrete', 0.01, 0.2, False, False, False, False],
+    ['./examples/output.mp4', 'shedding_concrete,rusting', 0.1, 0.1, False, True, False, False],
 ]
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -267,9 +267,8 @@ def process_video(
     with sv.VideoSink(result_file_path, video_info=video_info) as sink:
         for _ in tqdm(range(total), desc="Processing video..."):
             frame = next(frame_generator)
-            print(type(frame))  # <class 'numpy.ndarray'>
-            # TODO sava frame  单独检测
-            frame = Image.fromarray(frame)
+            frame = frame[:, :, ::-1]
+            frame = Image.fromarray(frame, mode="RGB")
             results = YOLO_WORLD_MODEL.infer(frame, confidence=confidence_threshold, iou=iou_threshold, text=categories)
             detections = sv.Detections.from_inference(results)
             detections = detections.with_nms(
@@ -292,9 +291,12 @@ def process_video(
                 with_confidence=with_confidence
             )
             frame = np.array(frame)
+            frame = frame[:, :, ::-1]
+            cv2.namedWindow("Real-Time Inference", 0)
             cv2.imshow("Real-Time Inference", frame)
             cv2.waitKey(10)
             sink.write_frame(frame)
+        cv2.destroyWindow("Real-Time Inference")
     return result_file_path
 
 
