@@ -211,11 +211,18 @@ def refine_segmentation(
         with_label=with_label,
         with_confidence=with_confidence
     )
-
+    refine_history.append(output_image)
     points = []
     total_seg_proportion = stastics.get_total_seg_proportion(detections, input_image)
     det_frame = stastics.get_det_dataFrame(detections, input_image)
     return output_image, points, total_seg_proportion, det_frame
+
+
+def redo_refine(output_imag: Image.Image):
+    if len(refine_history) == 0 or len(refine_history) == 1:
+        return output_imag
+    refine_history.pop()
+    return refine_history[-1]
 
 
 def annotate_image(
@@ -294,9 +301,11 @@ def process_image(
     average_confidence = stastics.get_average_confidence(detections)
     duration = stastics.format_time(end - start)
     det_frame = stastics.get_det_dataFrame(detections, input_image)
-    global Detections, Categories
+    global Detections, Categories, refine_history
     Detections = detections
     Categories = categories
+    refine_history.clear()
+    refine_history.append(output_image)
     return output_image, total_num, class_count, total_seg_proportion, average_confidence, duration, det_frame
 
 
@@ -427,6 +436,7 @@ with gr.Blocks(title=TITLE) as demo:
     global_points = gr.State([])
     Detections = None
     Categories = None
+    refine_history = []
     gr.Markdown(MARKDOWN)
     with gr.Accordion("Configuration", open=False):
         confidence_threshold_component.render()
@@ -458,17 +468,23 @@ with gr.Blocks(title=TITLE) as demo:
                 scale=1,
                 variant='primary'
             )
-            with gr.Column():
-                with gr.Group():
-                    seg_refine_mode_component = gr.Radio(
-                        choices=['Point', 'Box'],
-                        label='Refine Mode',
-                        value='Point',
-                        scale=1,
-                        interactive=True
-                    )
+            seg_refine_mode_component = gr.Radio(
+                choices=['Point', 'Box'],
+                label='Refine Mode',
+                value='Point',
+                scale=1,
+                interactive=True
+            )
+            with gr.Row():
+                with gr.Column():
                     seg_refine_button_component = gr.Button(
                         value='Refine',
+                        scale=1,
+                        variant='secondary'
+                    )
+                with gr.Column():
+                    refine_redo_button_component = gr.Button(
+                        value='Redo',
                         scale=1,
                         variant='secondary'
                     )
@@ -621,6 +637,15 @@ with gr.Blocks(title=TITLE) as demo:
             global_points,
             total_seg_proportion_component,
             det_sheet_component
+        ]
+    )
+    refine_redo_button_component.click(
+        fn=redo_refine,
+        inputs=[
+            output_image_component,
+        ],
+        outputs=[
+            output_image_component,
         ]
     )
     video_submit_button_component.click(
