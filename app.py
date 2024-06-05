@@ -212,6 +212,7 @@ def refine_segmentation(
         with_confidence=with_confidence
     )
     refine_history.append(output_image)
+    # fixbug 记录total_seg_proportion 和 det_frame, redo时，同时同步回滚统计结果
     points = []
     total_seg_proportion = stastics.get_total_seg_proportion(detections, input_image)
     det_frame = stastics.get_det_dataFrame(detections, input_image)
