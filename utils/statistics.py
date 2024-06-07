@@ -72,3 +72,21 @@ def get_det_dataFrame(detections: sv.Detections, image: Image.Image):
         ]
     }
     return pd.DataFrame(det_dict)
+
+
+def calculate_iou(box1, box2):
+    x1, y1, x2, y2 = box1
+    x1_, y1_, x2_, y2_ = box2
+
+    inter_x1 = max(x1, x1_)
+    inter_y1 = max(y1, y1_)
+    inter_x2 = min(x2, x2_)
+    inter_y2 = min(y2, y2_)
+
+    if inter_x1 < inter_x2 and inter_y1 < inter_y2:
+        inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+        box1_area = (x2 - x1) * (y2 - y1)
+        box2_area = (x2_ - x1_) * (y2_ - y1_)
+        iou = inter_area / float(box1_area + box2_area - inter_area)
+        return iou
+    return 0.0

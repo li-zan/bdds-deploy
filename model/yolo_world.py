@@ -3,6 +3,7 @@ from typing import Any
 from PIL import Image
 
 from ultralytics import YOLOWorld as yolo_world
+import supervision as sv
 
 from inference.core.entities.responses.inference import (
     InferenceResponseImage,
@@ -23,7 +24,7 @@ class YOLOWorld:
             text: list = None,
             confidence: float = 0.3,
             **kwargs,
-    ):
+    ) -> sv.Detections:
         t1 = perf_counter()
         if isinstance(image, Image.Image):
             img_dims = image.size
@@ -66,4 +67,9 @@ class YOLOWorld:
             image=InferenceResponseImage(width=img_dims[1], height=img_dims[0]),
             time=t2,
         )
-        return responses
+        detections = sv.Detections.from_inference(responses)
+        detections = detections.with_nms(
+            class_agnostic=kwargs['class_agnostic'],
+            threshold=kwargs['iou']
+        )
+        return detections

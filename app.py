@@ -9,11 +9,12 @@ from PIL import Image, ImageDraw
 import supervision as sv
 import torch
 from tqdm import tqdm
-from utils.yolo_world import YOLOWorld
-from utils import stastics
+from model.yolo_world import YOLOWorld
+from utils import statistics
 import timeit
 
-from utils.efficient_sam import load, inference_with_boxes, inference_with_points
+from model.efficient_sam import load, inference_with_boxes, inference_with_points
+from utils.history import History
 from utils.video import (
     generate_file_name,
     calculate_end_frame_index,
@@ -75,24 +76,23 @@ def process_categories(categories: str) -> List[str]:
     return [category.strip() for category in categories.split(',')]
 
 
-def get_points_with_draw(image: Image.Image, points: [], seg_refine_mode, with_segmentation: bool, evt: gr.SelectData):
+def get_points_with_draw(image: Image.Image, points: [], refine_mode, with_segmentation: bool, evt: gr.SelectData):
     if points is None:
         points = []
-    if with_segmentation is False:
+    if with_segmentation is False and refine_mode == 'Point':
         info("segmentation is not enable in configuration")
         return image, points
     print("Starting draw point")
     x, y = evt.index[0], evt.index[1]
     point_radius, point_color = 15, (255, 255, 0)
     points.append([x, y])
-
     if image is not None:
         draw = ImageDraw.Draw(image)
         draw.ellipse(
             [(x - point_radius, y - point_radius), (x + point_radius, y + point_radius)],
             fill=point_color,
         )
-    if seg_refine_mode == 'Box':
+    if refine_mode == 'Box':
         for i in range(0, len(points), 2):
             if len(points) >= i + 2:
                 x1, y1 = points[i]
@@ -116,26 +116,151 @@ def get_points_with_draw(image: Image.Image, points: [], seg_refine_mode, with_s
     return image, points
 
 
+def refine(
+    input_image: Image.Image,
+    output_image: Image.Image,
+    confidence_threshold: float,
+    iou_threshold: float,
+    points: [],
+    refine_mode: str,
+    total_seg_proportion,
+    average_confidence,
+    det_num,
+    class_count,
+    det_frame,
+    with_segmentation: bool = True,
+    with_label: bool = True,
+    with_confidence: bool = True,
+    with_class_agnostic_nms: bool = False
+):
+    if points is None or len(points) == 0:
+        return output_image, points, total_seg_proportion, average_confidence, det_num, class_count, det_frame
+    if refine_mode == 'Point' and with_segmentation is False:
+        info("segmentation is not enable in configuration")
+        return output_image, points, total_seg_proportion, average_confidence, det_num, class_count, det_frame
+    if refine_mode == 'Box':
+        if len(points) % 2 != 0:
+            info("The coordinates of box are incomplete")
+            return output_image, points, total_seg_proportion, average_confidence, det_num, class_count, det_frame
+    valid = True
+    if refine_mode == 'Point':
+        output_image, total_seg_proportion, det_frame, valid = \
+            refine_segmentation(input_image, output_image, points, total_seg_proportion,
+                                det_frame, with_label, with_confidence)
+    if refine_mode == 'Box':
+        output_image, total_seg_proportion, average_confidence, det_num, class_count, det_frame = \
+            refine_detection(input_image, confidence_threshold, iou_threshold,
+                             points, with_segmentation, with_label, with_confidence, with_class_agnostic_nms)
+    if valid:
+        global Detections
+        history.add_entry(output_image, total_seg_proportion, average_confidence, det_num, class_count, det_frame,
+                          Detections)
+    points = []
+    return output_image, points, total_seg_proportion, average_confidence, det_num, class_count, det_frame
+
+
+def refine_detection(
+    input_image: Image.Image,
+    confidence_threshold: float,
+    iou_threshold: float,
+    points: [],
+    with_segmentation: bool = True,
+    with_label: bool = True,
+    with_confidence: bool = True,
+    with_class_agnostic_nms: bool = False
+):
+    print("Starting refine detection")
+
+    global Detections, Categories
+    detections = Detections
+    categories = Categories
+
+    for i in range(0, len(points), 2):
+        x1, y1 = points[i]
+        x2, y2 = points[i + 1]
+        region = input_image.crop((x1, y1, x2, y2))
+        region_detections = YOLO_WORLD_MODEL.infer(
+            region,
+            confidence=confidence_threshold,
+            iou=iou_threshold,
+            text=categories,
+            class_agnostic=with_class_agnostic_nms
+        )
+        # 将检测结果调整回全图坐标系
+        for detection in region_detections.xyxy:
+            detection[0] += x1
+            detection[1] += y1
+            detection[2] += x1
+            detection[3] += y1
+        # 移除与现有检测结果重复的目标
+        keep_indices = []
+        for j, region_detection in enumerate(region_detections.xyxy):
+            is_duplicate = False
+            for detection in detections.xyxy:
+                if statistics.calculate_iou(region_detection, detection) > 0.4:
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                keep_indices.append(j)
+
+        # 根据keep_indices更新region_detections的所有属性
+        if len(keep_indices) > 0:
+            region_detections.xyxy = region_detections.xyxy[keep_indices]
+            if region_detections.mask is not None:
+                region_detections.mask = region_detections.mask[keep_indices]
+            if region_detections.confidence is not None:
+                region_detections.confidence = region_detections.confidence[keep_indices]
+            if region_detections.class_id is not None:
+                region_detections.class_id = region_detections.class_id[keep_indices]
+            if region_detections.tracker_id is not None:
+                region_detections.tracker_id = region_detections.tracker_id[keep_indices]
+            for key in region_detections.data:
+                if isinstance(region_detections.data[key], np.ndarray):
+                    region_detections.data[key] = region_detections.data[key][keep_indices]
+                else:
+                    region_detections.data[key] = [region_detections.data[key][k] for k in keep_indices]
+        else:
+            region_detections = sv.Detections(xyxy=np.array([[0, 0, 0, 0]]))
+            region_detections.xyxy = []
+
+        input_image_np = np.array(input_image)
+        if with_segmentation:
+            region_detections.mask = inference_with_boxes(
+                image=input_image_np,
+                xyxy=region_detections.xyxy,
+                model=EFFICIENT_SAM_MODEL,
+                device=DEVICE
+            )
+        if len(region_detections) > 0:
+            detections = sv.Detections.merge([detections, region_detections])
+
+    Detections = detections
+    output_image = annotate_image(
+        input_image=input_image,
+        detections=detections,
+        categories=categories,
+        with_label=with_label,
+        with_confidence=with_confidence
+    )
+    det_num = statistics.get_total_num(detections)
+    class_count = statistics.get_class_count(detections)
+    total_seg_proportion = statistics.get_total_seg_proportion(detections, input_image)
+    average_confidence = statistics.get_average_confidence(detections)
+    det_frame = statistics.get_det_dataFrame(detections, input_image)
+
+    return output_image, total_seg_proportion, average_confidence, det_num, class_count, det_frame
+
+
 def refine_segmentation(
     input_image: Image.Image,
     output_image: Image.Image,
     points: [],
-    seg_refine_mode: str,
     total_seg_proportion,
     det_frame,
-    with_segmentation: bool = True,
     with_label: bool = True,
     with_confidence: bool = True
 ):
-    if points is None or len(points) == 0:
-        return output_image, points, total_seg_proportion, det_frame
-    if with_segmentation is False:
-        info("segmentation is not enable in configuration")
-        return output_image, points, total_seg_proportion, det_frame
-    if seg_refine_mode == 'Box':
-        if len(points) % 2 != 0:
-            info("The coordinates of box are incomplete")
-            return output_image, points, total_seg_proportion, det_frame
+
     print("Starting refine segmentation")
     # 剔除检测框外的点
     global Detections, Categories
@@ -144,61 +269,43 @@ def refine_segmentation(
 
     filtered_points = []
     filtered_indices = []
-    if seg_refine_mode == 'Box':
-        for idx in range(0, len(points), 2):
-            x1, y1 = points[idx]
-            x2, y2 = points[idx + 1]
-            max_area = 0
-            max_area_index = -1
-            for i, detection in enumerate(detections.xyxy):
-                x_min, y_min, x_max, y_max = detection[:4]
-                if x1 >= x_min and y1 >= y_min and x2 <= x_max and y2 <= y_max:
-                    area = (x_max - x_min) * (y_max - y_min)
-                    if area > max_area:
-                        max_area = area
-                        max_area_index = i
-            if max_area_index != -1:
-                filtered_points.append([x1, y1, x2, y2])
-                filtered_indices.append(max_area_index)
-
-    elif seg_refine_mode == 'Point':
-        for point in points:
-            x, y = point
-            max_area = 0
-            max_area_index = -1
-            for i, detection in enumerate(detections.xyxy):
-                x1, y1, x2, y2 = detection[:4]
-                if x1 <= x <= x2 and y1 <= y <= y2:
-                    area = (x2 - x1) * (y2 - y1)
-                    if area > max_area:
-                        max_area = area
-                        max_area_index = i
-            if max_area_index != -1:
-                filtered_points.append(point)
-                filtered_indices.append(max_area_index)
+    for point in points:
+        x, y = point
+        max_area = 0
+        max_area_index = -1
+        for i, detection in enumerate(detections.xyxy):
+            x1, y1, x2, y2 = detection[:4]
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                area = (x2 - x1) * (y2 - y1)
+                if area > max_area:
+                    max_area = area
+                    max_area_index = i
+        if max_area_index != -1:
+            filtered_points.append(point)
+            filtered_indices.append(max_area_index)
 
     if len(filtered_points) == 0:
         info("All points are invalid")
-        return output_image, points, total_seg_proportion, det_frame
+        return output_image, total_seg_proportion, det_frame, False
 
     # 根据point做seg
     input_image_np = np.array(input_image)
-    if seg_refine_mode == 'Point':
-        point_mask = inference_with_points(
-            image=input_image_np,
-            points=filtered_points,
-            model=EFFICIENT_SAM_MODEL,
-            device=DEVICE
-        )
-    if seg_refine_mode == 'Box':
-        filtered_points = np.array(filtered_points)
-        point_mask = inference_with_boxes(
-            image=input_image_np,
-            xyxy=filtered_points,
-            model=EFFICIENT_SAM_MODEL,
-            device=DEVICE
-        )
-    # 更新mask
+    point_mask = inference_with_points(
+        image=input_image_np,
+        points=filtered_points,
+        model=EFFICIENT_SAM_MODEL,
+        device=DEVICE
+    )
+
+    # 限制point_mask在对应的检测框内
+    for i, index in enumerate(filtered_indices):
+        x1, y1, x2, y2 = map(int, detections.xyxy[index][:4])
+        mask = point_mask[i]
+        cropped_mask = np.zeros_like(mask)
+        cropped_mask[y1:y2, x1:x2] = mask[y1:y2, x1:x2]
+        point_mask[i] = cropped_mask
+
+    # 加和更新mask
     updated_mask = detections.mask.copy()
     for i, index in enumerate(filtered_indices):
         updated_mask[index] = np.logical_or(updated_mask[index], point_mask[i])
@@ -211,19 +318,28 @@ def refine_segmentation(
         with_label=with_label,
         with_confidence=with_confidence
     )
-    refine_history.append(output_image)
-    # fixbug 记录total_seg_proportion 和 det_frame, redo时，同时同步回滚统计结果
+    Detections = detections
+    total_seg_proportion = statistics.get_total_seg_proportion(detections, input_image)
+    det_frame = statistics.get_det_dataFrame(detections, input_image)
+    return output_image, total_seg_proportion, det_frame, True
+
+
+def undo_refine():
+    global Detections, history
     points = []
-    total_seg_proportion = stastics.get_total_seg_proportion(detections, input_image)
-    det_frame = stastics.get_det_dataFrame(detections, input_image)
-    return output_image, points, total_seg_proportion, det_frame
-
-
-def redo_refine(output_imag: Image.Image):
-    if len(refine_history) == 0 or len(refine_history) == 1:
-        return output_imag
-    refine_history.pop()
-    return refine_history[-1]
+    history.undo()
+    latest_entry = history.get_latest_entry()
+    if latest_entry:
+        output_image = latest_entry['output_image']
+        total_seg_proportion = latest_entry['total_seg_proportion']
+        average_confidence = latest_entry['average_confidence']
+        det_num = latest_entry['det_num']
+        class_count = latest_entry['class_count']
+        det_frame = latest_entry['det_frame']
+        Detections = latest_entry['detections']
+        return points, output_image, total_seg_proportion, average_confidence, det_num, class_count, det_frame
+    else:
+        return points, None, None, None, None, None, None
 
 
 def annotate_image(
@@ -267,6 +383,8 @@ def process_image(
     with_confidence: bool = False,
     with_class_agnostic_nms: bool = False,
 ):
+    if input_image is None:
+        return None, None, None, None, None, None, None
     start = timeit.default_timer()
     categories = process_categories(categories)
     # 单病害单模型
@@ -274,12 +392,14 @@ def process_image(
     # results = YOLO_WORLD_MODEL[categories[0]].infer(input_image, confidence=confidence_threshold, iou=iou_threshold,
     #                                                 text=categories)
     # 多病害模型
-    results = YOLO_WORLD_MODEL.infer(input_image, confidence=confidence_threshold, iou=iou_threshold, text=categories)
-    detections = sv.Detections.from_inference(results)
-    detections = detections.with_nms(
-        class_agnostic=with_class_agnostic_nms,
-        threshold=iou_threshold
+    detections = YOLO_WORLD_MODEL.infer(
+        input_image,
+        confidence=confidence_threshold,
+        iou=iou_threshold,
+        text=categories,
+        class_agnostic=with_class_agnostic_nms
     )
+
     input_image_np = np.array(input_image)
     if with_segmentation:
         detections.mask = inference_with_boxes(
@@ -296,17 +416,18 @@ def process_image(
         with_confidence=with_confidence
     )
     end = timeit.default_timer()
-    total_num = stastics.get_total_num(detections)
-    class_count = stastics.get_class_count(detections)
-    total_seg_proportion = stastics.get_total_seg_proportion(detections, input_image)
-    average_confidence = stastics.get_average_confidence(detections)
-    duration = stastics.format_time(end - start)
-    det_frame = stastics.get_det_dataFrame(detections, input_image)
-    global Detections, Categories, refine_history
+    total_num = statistics.get_total_num(detections)
+    class_count = statistics.get_class_count(detections)
+    total_seg_proportion = statistics.get_total_seg_proportion(detections, input_image)
+    average_confidence = statistics.get_average_confidence(detections)
+    duration = statistics.format_time(end - start)
+    det_frame = statistics.get_det_dataFrame(detections, input_image)
+    global Detections, Categories, history
     Detections = detections
     Categories = categories
-    refine_history.clear()
-    refine_history.append(output_image)
+    history.clear()
+    history.add_entry(output_image, total_seg_proportion, average_confidence, total_num, class_count, det_frame,
+                      Detections)
     return output_image, total_num, class_count, total_seg_proportion, average_confidence, duration, det_frame
 
 
@@ -338,11 +459,12 @@ def process_video(
             frame = next(frame_generator)
             frame = frame[:, :, ::-1]
             frame = Image.fromarray(frame, mode="RGB")
-            results = YOLO_WORLD_MODEL.infer(frame, confidence=confidence_threshold, iou=iou_threshold, text=categories)
-            detections = sv.Detections.from_inference(results)
-            detections = detections.with_nms(
-                class_agnostic=with_class_agnostic_nms,
-                threshold=iou_threshold
+            detections = YOLO_WORLD_MODEL.infer(
+                frame,
+                confidence=confidence_threshold,
+                iou=iou_threshold,
+                text=categories,
+                class_agnostic=with_class_agnostic_nms
             )
             frame_np = np.array(frame)
             if with_segmentation:
@@ -435,9 +557,9 @@ with_class_agnostic_nms_component = gr.Checkbox(
 
 with gr.Blocks(title=TITLE) as demo:
     global_points = gr.State([])
-    Detections = None
-    Categories = None
-    refine_history = []
+    Detections: sv.Detections = None
+    Categories: List[str] = None
+    history = History()
     gr.Markdown(MARKDOWN)
     with gr.Accordion("Configuration", open=False):
         confidence_threshold_component.render()
@@ -469,7 +591,7 @@ with gr.Blocks(title=TITLE) as demo:
                 scale=1,
                 variant='primary'
             )
-            seg_refine_mode_component = gr.Radio(
+            refine_mode_component = gr.Radio(
                 choices=['Point', 'Box'],
                 label='Refine Mode',
                 value='Point',
@@ -478,14 +600,14 @@ with gr.Blocks(title=TITLE) as demo:
             )
             with gr.Row():
                 with gr.Column():
-                    seg_refine_button_component = gr.Button(
+                    refine_button_component = gr.Button(
                         value='Refine',
                         scale=1,
                         variant='secondary'
                     )
                 with gr.Column():
-                    refine_redo_button_component = gr.Button(
-                        value='Redo',
+                    refine_undo_button_component = gr.Button(
+                        value='Undo',
                         scale=1,
                         variant='secondary'
                     )
@@ -594,7 +716,7 @@ with gr.Blocks(title=TITLE) as demo:
 
     output_image_component.select(
         fn=get_points_with_draw,
-        inputs=[output_image_component, global_points, seg_refine_mode_component, with_segmentation_component],
+        inputs=[output_image_component, global_points, refine_mode_component, with_segmentation_component],
         outputs=[output_image_component, global_points]
     )
 
@@ -620,33 +742,45 @@ with gr.Blocks(title=TITLE) as demo:
             det_sheet_component
         ]
     )
-    seg_refine_button_component.click(
-        fn=refine_segmentation,
+    refine_undo_button_component.click(
+        fn=undo_refine,
+        outputs=[
+            global_points,
+            output_image_component,
+            total_seg_proportion_component,
+            average_confidence_component,
+            det_num_component,
+            class_count_component,
+            det_sheet_component
+        ]
+    )
+    refine_button_component.click(
+        fn=refine,
         inputs=[
             input_image_component,
             output_image_component,
+            confidence_threshold_component,
+            iou_threshold_component,
             global_points,
-            seg_refine_mode_component,
+            refine_mode_component,
             total_seg_proportion_component,
+            average_confidence_component,
+            det_num_component,
+            class_count_component,
             det_sheet_component,
             with_segmentation_component,
             with_label_component,
             with_confidence_component,
+            with_class_agnostic_nms_component
         ],
         outputs=[
             output_image_component,
             global_points,
             total_seg_proportion_component,
+            average_confidence_component,
+            det_num_component,
+            class_count_component,
             det_sheet_component
-        ]
-    )
-    refine_redo_button_component.click(
-        fn=redo_refine,
-        inputs=[
-            output_image_component,
-        ],
-        outputs=[
-            output_image_component,
         ]
     )
     video_submit_button_component.click(
